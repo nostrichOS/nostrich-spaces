@@ -1,0 +1,31 @@
+# The relay as a compose service. Host networking, because QUIC wants real source addresses on
+# both IP families and a bridged network is usually IPv4-only.
+services:
+  moq:
+    image: kixelated/moq-relay:0.10.15
+    restart: unless-stopped
+    network_mode: host
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    # QUIC multiplexes every listener on one socket, but a WebSocket-fallback listener is a
+    # descriptor each; the image's default soft limit is 1024.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # The config file is a positional argument; there is no --config flag.
+    command: ["/etc/moq/relay.toml"]
+    environment:
+      # The binary ships with jemalloc profiling compiled in and enabled at start; with the
+      # allocator's defaults that fails and the process exits. Enabled-but-inactive is expected.
+      _RJEM_MALLOC_CONF: "prof:true,prof_active:false"
+      MALLOC_CONF: "prof:true,prof_active:false"
+    volumes:
+      - ./relay.toml:/etc/moq/relay.toml:ro
+      - ./public.jwk:/etc/moq/public.jwk:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro

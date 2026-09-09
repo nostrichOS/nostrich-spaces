@@ -1,0 +1,9 @@
+node_modules
+dist
+*.log
+.DS_Store
+# Keys never live in the tree. The public half of a relay key is fine to commit, the private half is not.
+private.jwk
+*.private.jwk
+.env
+.env.*

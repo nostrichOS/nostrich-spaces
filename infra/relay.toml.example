@@ -1,0 +1,26 @@
+# moq-relay 0.10.x — the audio relay a room's `streaming` tag points at.
+#
+# One public port, 4443: UDP for QUIC/WebTransport and TCP for the HTTPS listener that carries
+# the WebSocket fallback. The same number on both, so a client derives the fallback from the
+# room's `streaming` URL without a second field.
+#
+# Nothing here is anonymous. Every session carries a JWT minted by the token service
+# (src/auth), verified against the PUBLIC key below. The relay never reads Nostr.
+
+[server]
+bind = "[::]:4443"
+
+# Lists, not strings: the relay accepts several certificates and refuses a bare path.
+[server.tls]
+cert = ["/etc/letsencrypt/live/relay.example.org/fullchain.pem"]
+key = ["/etc/letsencrypt/live/relay.example.org/privkey.pem"]
+
+[web.https]
+listen = "[::]:4443"
+cert = "/etc/letsencrypt/live/relay.example.org/fullchain.pem"
+key = "/etc/letsencrypt/live/relay.example.org/privkey.pem"
+
+# ONE key, in the relay's own JWK shape: `alg`, `key_ops` (required), `kty`/`crv`/`x`/`y`,
+# `kid`. A JWK SET is not accepted here. scripts/keygen.mjs writes exactly this file.
+[auth]
+key = "/etc/moq/public.jwk"

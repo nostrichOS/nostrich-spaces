@@ -1,0 +1,30 @@
+{
+  "name": "nostrich-spaces",
+  "version": "0.1.0",
+  "description": "Live audio rooms on Nostr, open to every client: the NIP-53 events, the Media-over-QUIC transport and the token service behind Nostrich Spaces.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "repository": { "type": "git", "url": "https://github.com/nostrichOS/nostrich-spaces" },
+  "keywords": ["nostr", "nip-53", "audio", "spaces", "moq", "webtransport", "protocol"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "keygen": "node scripts/keygen.mjs"
+  },
+  "dependencies": {
+    "@moq/hang": "0.2.0",
+    "@moq/lite": "0.1.7",
+    "@moq/publish": "0.2.3",
+    "@moq/watch": "0.2.3",
+    "@noble/hashes": "1.6.1",
+    "jose": "5.9.6",
+    "nostr-tools": "2.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "typescript": "5.7.3",
+    "vitest": "2.1.8"
+  }
+}
