@@ -1,6 +1,6 @@
 {
   "name": "nostrich-spaces",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Live audio rooms on Nostr, open to every client: the NIP-53 events, the Media-over-QUIC transport and the token service behind Nostrich Spaces.",
   "license": "MIT",
   "type": "module",
