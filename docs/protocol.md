@@ -26,9 +26,59 @@ listener. `normalizeRole` reads both generations of the vocabulary.
 - **On stage.** A live room older than ten minutes is only listed while somebody's heartbeat in
   the last ten minutes says `onstage 1`. other implementations apply the same rule; a host who closed the
   tab without ending the room otherwise leaves it saying `live` for hours.
+- **A p-tag is a role, not a seat.** A room names who MAY speak; only the host can take that back,
+  and a speaker who leaves keeps their tag. So a named speaker or co-host is drawn on the stage only
+  while they are present: a heartbeat in the last six minutes that is not a departure (below), and
+  that says `onstage 1` or `publishing 1`, or that is older than the room's newest revision (they
+  were promoted and their client has not answered yet). Anybody the relay is carrying a broadcast
+  from is on the stage whatever their heartbeat says. The host is always drawn.
 - **The host** is the `host` p-tag, else the author.
 - **Counts** only when somebody published one. Never `0`.
 - **Nothing is guessed.** A room with no page and no relay parses to a card with no button.
+
+## Leaving: an optional `left` tag
+
+EGG-04's last heartbeat (`publishing 0`, `onstage 0`) is still a fresh presence in the room, so a
+reader following the spec alone keeps the leaver in the audience for six minutes. The last
+heartbeat this library sends (`buildDeparture`) is the spec's, with every flag at `0` (a raised hand
+too), plus one tag:
+
+```json
+["left", "1"]
+```
+
+A reader that knows the tag takes the person out of the room the moment it arrives; one that does
+not sees an ordinary off-stage heartbeat, so nothing breaks for anybody. Two rules make it
+reliable:
+
+- **Stamp every heartbeat at least a second after the one before it.** Kind 10312 is replaceable,
+  and two in one second are settled by id, so a departure can lose to the beat it replaces. A
+  departure sent while switching rooms must also be older than the new room's first beat.
+- **Keep one heartbeat per person, the newest, whichever room it names** (EGG-04 rule 11), and keep
+  a departure until it goes stale, so a slower relay's older copy cannot put the person back.
+
+## Speaking: one channel, 48 kHz
+
+EGG-03 says Opus, 48 kHz, mono, and a speaker must mean it: both halves fail silently. `@moq/publish`
+builds its encoder from the microphone track's `getSettings()`, and browsers disagree about what
+those say:
+
+- **Channels.** WebKit (Safari, every iPhone) reports no `channelCount`; the library then builds a
+  stereo encoder, feeds it a mono microphone, fails the first frame and resets the track. The
+  speaker's own screen shows a working mic; listeners get nothing.
+- **Rate.** A microphone running at 44.1 kHz (common on Windows and on USB microphones) is encoded
+  at 44.1 kHz. Chrome and WebKit both encode that without complaint and neither can decode it, and
+  `AudioDecoder.isConfigSupported` says yes to it all the same.
+
+`opusSource` makes the settings the library reads say one channel at 48 kHz; the browser resamples
+the microphone into the 48 kHz capture context (checked in Chrome and WebKit). A listener can tell
+from the catalog: `numberOfChannels` other than `1` or a `sampleRate` other than `48000` is a
+speaker nobody can hear. Test a speaker with a listener that DECODES: a byte counter passes both
+failures, because the stream is on the wire and simply cannot be played.
+
+`RoomSpeaker.switchTo(device)` changes the microphone mid-broadcast: the new input is opened first,
+a refusal keeps the current one broadcasting, mute carries over, and listeners re-subscribe within a
+second, as they do after an unmute.
 
 ## The audio wire (audio-room protocol, EGG-01 … EGG-12)
 

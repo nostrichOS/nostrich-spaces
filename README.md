@@ -59,7 +59,7 @@ protocol joins them. → [docs/hosting.md](./docs/hosting.md)
 | Path | What it is |
 |---|---|
 | `src/events/` | Builders and parsers for kinds 30312, 30313, 10312, 1311, 7 and 4312, with the freshness, host and on-stage rules and their tests. `spaceFrom(event)` turns any event into a listable `Space` or nothing. |
-| `src/audio/` | `RoomListener` and `RoomSpeaker`: the room's audio wire on `@moq/lite` 0.1.7, `@moq/watch` 0.2.3 and `@moq/publish` 0.2.3, pinned exactly because the relay speaks one draft of the protocol. |
+| `src/audio/` | `RoomListener` and `RoomSpeaker`: the room's audio wire on `@moq/lite` 0.1.7, `@moq/watch` 0.2.3 and `@moq/publish` 0.2.3, pinned exactly because the relay speaks one draft of the protocol. A speaker is always encoded mono at 48 kHz, whatever the browser reports about its microphone, and can switch microphone mid-broadcast (`switchTo`); a listener never subscribes to its own broadcast. See [docs/protocol.md](./docs/protocol.md#speaking-one-channel-48-khz). |
 | `src/auth/` | The token service: NIP-98 verification, the EGG-07 role check against the room's newest event, ES256 minting, the JWKS document, a replay guard. Two handlers on the standard `Request`/`Response`. |
 | `scripts/keygen.mjs` | The relay key pair, once. |
 | `infra/` | The relay's config and compose service, as templates. |

@@ -32,6 +32,11 @@ describe('parsePresence', () => {
     expect(parsePresence(event([['a', ROOM], ['muted', '0']])).muted).toBe(false)
   })
 
+  it('reads a departure only from our `left` tag, never from flags that happen to be off', () => {
+    expect(parsePresence(event([['a', ROOM], ['hand', '0'], ['muted', '0'], ['publishing', '0'], ['onstage', '0']])).left).toBe(false)
+    expect(parsePresence(event([['a', ROOM], ['onstage', '0'], ['left', '1']])).left).toBe(true)
+  })
+
   it('drops a room tag that is not an address', () => {
     expect(parsePresence(event([['a', 'not-an-address']])).room).toBeUndefined()
     expect(parsePresence(event([])).room).toBeUndefined()

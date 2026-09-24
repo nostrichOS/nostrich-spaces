@@ -16,6 +16,8 @@ import type { Hex, NostrEvent } from '../core/types'
  *
  * Parsing only. The heartbeat our own rooms publish is built in `room-builders.ts`; the four
  * flags here are the four EGG-04 defines, and a client that omits one is read as `0` for it.
+ * The fifth, `left`, is ours: the last beat a Nostrich client sends, which says the person has
+ * gone rather than stepped off the stage (`buildDeparture`).
  */
 
 /** NIP-53 room presence. Replaceable: one per pubkey, republished as a heartbeat. */
@@ -40,6 +42,8 @@ export interface PresenceEvent {
   publishing: boolean | undefined
   /** Holds a speaker slot and has not stepped off (EGG-04). */
   onstage: boolean | undefined
+  /** The last beat of somebody who has LEFT the room (`["left", "1"]`, see `buildDeparture`). */
+  left: boolean
   /** Unix seconds of the heartbeat. */
   at: number
 }
@@ -63,6 +67,7 @@ export function parsePresence(event: NostrEvent): PresenceEvent {
     muted: flag(event, 'muted'),
     publishing: flag(event, 'publishing'),
     onstage: flag(event, 'onstage'),
+    left: flag(event, 'left') === true,
     at: event.created_at,
   }
 }

@@ -180,6 +180,24 @@ export function buildPresence(
   }
 }
 
+/**
+ * LEAVING, SAID SO IT IS HEARD AT ONCE. EGG-04 ends a seat with one last heartbeat, `publishing`
+ * and `onstage` at 0, and gives receivers nothing more: that beat is still a fresh presence IN the
+ * room, so a reader of the spec keeps the leaver in the audience for six minutes, and a speaker's
+ * p-tag keeps them drawn on the stage until the host demotes them, which only the host can do.
+ *
+ * So the last beat is the spec's with EVERY flag at 0 (a raised hand too, or the host's queue holds
+ * it) plus `["left", "1"]`, an optional extension described in docs/protocol.md. A reader of the
+ * spec sees an ordinary off-stage heartbeat; a reader that knows the tag takes the person out of the
+ * room the moment it arrives. Replaceable, so it is also what every relay hands a reader who opens
+ * the room afterwards. Stamp it at least a second after the beat before it: two beats in one second
+ * are settled by id, and the departure has to win.
+ */
+export function buildDeparture(address: string, options: { relay?: RelayUrl } & BuildOptions = {}): EventTemplate {
+  const beat = buildPresence(address, PRESENCE_OFF, options)
+  return { ...beat, tags: [...beat.tags, ['left', '1']] }
+}
+
 export type AdminAction = 'kick' | 'mute'
 
 /**

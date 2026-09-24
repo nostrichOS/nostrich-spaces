@@ -23,8 +23,8 @@ import type { Hex, NostrEvent, RelayUrl } from '../core/types'
  * event is younger than `LIVE_FRESH_SECONDS`; a meeting, which the spec says to update while
  * running, gets one hour. Of 52 rooms saying live or open, three were fresh.
  *
- * THE HOST. A p-tag with the host role, else the author. (one service, which signed every room
- * with one platform key, had a rule of its own here; one service is dropped — see below.)
+ * THE HOST. A p-tag with the host role, else the author. A room with no host p-tag is
+ * attributed to whoever signed it.
  *
  * THE PAGE. `service` is a web page for another service and another service, an API base for
  * a streaming service, and absent for the protocol, whose rooms are reachable at `the reference service/room/<naddr>`.
@@ -121,11 +121,10 @@ export const PLANNED_GRACE_SECONDS = 2 * 60 * 60
 export const AUDIO_ROOM_HOSTS: readonly string[] = Object.freeze([])
 
 /**
- * Services a client chooses not to list — by hostname suffix, or by a hashtag their events
- * carry. Empty here: that is a product decision, not the protocol's. Fill it in your fork.
+ * Services a client chooses not to list, by hostname suffix. Empty here: that is a product
+ * decision, not the protocol's. Fill it in your fork.
  */
 const DROPPED_SERVICE_HOSTS: readonly string[] = Object.freeze([])
-const DROPPED_HASHTAGS: readonly string[] = Object.freeze([])
 
 function droppedHost(host: string | undefined): boolean {
   return host !== undefined && DROPPED_SERVICE_HOSTS.some(known => host === known || host.endsWith(`.${known}`))
@@ -301,9 +300,9 @@ function streamJoinUrl(service: string | undefined, streaming: string | undefine
 export function spaceFrom(event: NostrEvent, now: number): Space | undefined {
   const space = spaceFromKind(event, now)
   if (space === undefined) return undefined
-  if (droppedHost(space.service.host) || droppedHost(hostOf(space.stream)) || space.hashtags.some(tag => DROPPED_HASHTAGS.includes(tag))) {
-    return undefined
-  }
+  // The page AND the transport: a dropped service is dropped from every surface, including the
+  // card a pasted link would otherwise draw.
+  if (droppedHost(space.service.host) || droppedHost(hostOf(space.stream))) return undefined
   return space
 }
 

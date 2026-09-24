@@ -29,7 +29,8 @@ export { roomWire, type RoomWire } from './room-wire'
  *  2. WebTransport to <relay>/<namespace>?jwt=<token>, WebSocket when the browser has no
  *     WebTransport (the library falls back by itself).
  *  3. The relay announces one broadcast per speaker, named by their pubkey. Each becomes a
- *     Watch.Broadcast → Sync → Audio.Source → Decoder → Emitter, which is the speaker.
+ *     Watch.Broadcast → Sync → Audio.Source → Decoder → Emitter, which is the speaker — every
+ *     one of them but the reader's OWN, which is their own microphone coming back (EGG-03 §6).
  *
  * ── Anonymous by construction ────────────────────────────────────────────────────────
  *
@@ -72,7 +73,12 @@ export type ListenerStatus = 'idle' | 'authorising' | 'connecting' | 'connected'
 
 export interface ListenerState {
   status: ListenerStatus
-  /** Pubkeys currently broadcasting audio, in the order they were heard. */
+  /**
+   * Pubkeys currently broadcasting audio, in the order they were heard — INCLUDING the reader's
+   * own while they hold the microphone. It is the room's roster and not the list of pipelines:
+   * the reader's broadcast is heard about and deliberately never subscribed (`reconcile`), and a
+   * host talking alone must not read "Waiting for the host to speak" on their own screen.
+   */
   speakers: readonly Hex[]
   /** Encoded audio bytes received across every speaker: the proof that sound is arriving. */
   bytes: number
@@ -101,6 +107,10 @@ export class RoomListener {
   private watch: typeof Watch | undefined
   private connection: Moq.Connection.Reload | undefined
   private readonly speakers = new Map<Hex, SpeakerPipeline>()
+  /** Every pubkey heard broadcasting, in arrival order: the roster, the reader included. */
+  private heard: Hex[] = []
+  /** The pubkey this session may publish under — the one broadcast it must not subscribe to. */
+  private mine: Hex | undefined
   private readonly bytes = new Map<Hex, number>()
   private readonly listeners = new Set<(state: ListenerState) => void>()
   private readonly disposers: Array<() => void> = []
@@ -123,9 +133,13 @@ export class RoomListener {
    * Connect and listen. `signer` is optional: without one, a throwaway key signs the token
    * request. `publish` asks for a token that may also broadcast — the reader's OWN key then,
    * because the relay grants `put` to the pubkey the room's event names, and a speaker's
-   * broadcast is named by that same pubkey (EGG-03).
+   * broadcast is named by that same pubkey (EGG-03). `self` is that pubkey, and it names the one
+   * broadcast this session will not listen to.
    */
-  async start(signer: Signer = PrivateKeySigner.generate(), options: { publish?: boolean } = {}): Promise<void> {
+  async start(signer: Signer = PrivateKeySigner.generate(), options: { publish?: boolean; self?: Hex } = {}): Promise<void> {
+    // Only a session that may publish can own a broadcast in this room, so only that session
+    // skips it: the same key signed in on a second device is another microphone and is heard.
+    this.mine = options.publish === true ? options.self : undefined
     this.set({ status: 'authorising' })
     let token: string
     try {
@@ -190,12 +204,18 @@ export class RoomListener {
     for (const pipeline of this.speakers.values()) pipeline.emitter.volume.set(this.volume)
   }
 
-  /** Browsers start audio suspended until a gesture; the Listen tap is one, so resume on it. */
+  /**
+   * Browsers start audio suspended until a gesture; the Listen tap is one, so resume on it.
+   * Every context is asked in the same turn, not one per `await`: Safari honours a resume only
+   * while the tap is still being handled, so the second speaker of a sequential loop stayed silent.
+   */
   async resume(): Promise<void> {
+    const waiting: Promise<void>[] = []
     for (const pipeline of this.speakers.values()) {
       const context = pipeline.decoder.context.peek()
-      if (context !== undefined && context.state !== 'running') await context.resume().catch(() => undefined)
+      if (context !== undefined && context.state !== 'running') waiting.push(context.resume().catch(() => undefined))
     }
+    await Promise.all(waiting)
   }
 
   stop(): void {
@@ -208,6 +228,7 @@ export class RoomListener {
       this.connection?.enabled.set(false)
     }
     this.connection = undefined
+    this.heard = []
     this.set({ status: 'idle', speakers: [], bytes: 0, bytesBy: new Map() })
   }
 
@@ -217,12 +238,24 @@ export class RoomListener {
       const pubkey = String(path).toLowerCase()
       if (!/^[0-9a-f]{64}$/.test(pubkey)) continue
       seen.add(pubkey as Hex)
+      /*
+       * A SPEAKER NEVER SUBSCRIBES TO THEIR OWN BROADCAST — EGG-03 §6, in those words, "would
+       * create an audio loopback through the relay". The relay announces a broadcast back to
+       * the session that published it, and this loop followed every announced pubkey, so from
+       * the moment a host unmuted they heard their own voice a jitter buffer (150 ms) plus an
+       * encode and a decode late. `echoCancellation` cannot touch it — AEC removes
+       * what a loudspeaker leaks into the microphone, and this arrives as somebody's audio and
+       * is played on purpose, so it echoes in headphones too.
+       */
+      if (pubkey === this.mine) continue
       if (!this.speakers.has(pubkey as Hex)) this.follow(pubkey as Hex)
     }
     for (const pubkey of [...this.speakers.keys()]) {
       if (!seen.has(pubkey)) this.drop(pubkey)
     }
-    this.set({ speakers: [...this.speakers.keys()] })
+    // The roster keeps its arrival order, gains whoever is new and loses whoever stopped.
+    this.heard = [...this.heard, ...[...seen].filter(pubkey => !this.heard.includes(pubkey))].filter(pubkey => seen.has(pubkey))
+    this.set({ speakers: this.heard })
   }
 
   private follow(pubkey: Hex): void {
@@ -282,6 +315,14 @@ export class RoomListener {
  *
  * The connection is the listener's: a speaker also listens, and one session with a token that
  * carries `put` does both. A listener promoted mid-room reconnects with such a token first.
+ *
+ * ── The ring over the reader's own face ──────────────────────────────────────────────
+ *
+ * Everybody else's talking ring is drawn from the relay's byte count, and the reader's cannot be:
+ * their own broadcast is never subscribed (EGG-03 §6, `reconcile` above). So it is measured where
+ * the sound actually is — an AnalyserNode on the published track, wired to NOTHING else, so the
+ * microphone is read and never played. It is the better signal besides: no round trip, so the ring
+ * moves with the voice instead of a jitter buffer behind it.
  */
 export type SpeakerStatus = 'idle' | 'asking' | 'live' | 'muted' | 'denied' | 'failed'
 
@@ -290,11 +331,68 @@ export interface SpeakerState {
   error: string | undefined
 }
 
+/**
+ * Peak amplitude, of a full-scale 1, that is a voice rather than a room. Automatic gain control is
+ * on, which puts speech peaks well above 0.1, and noise suppression puts a quiet room near zero.
+ */
+const TALKING_PEAK = 0.05
+
+/** How long one loud sample keeps the ring lit, so the gaps between syllables do not blink it. */
+const TALKING_HOLD_MS = 700
+
+/** The meter's own clock, faster than the view samples so a short word is not stepped over. */
+const METER_MS = 100
+
+/** How every microphone is opened, the first and any switched to: one voice, cleaned up. */
+const MIC_CONSTRAINTS = { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } as const
+
+/**
+ * WHAT THE ENCODER IS TOLD ABOUT THE MICROPHONE: one channel, 48 kHz. `@moq/publish` reads both
+ * off `getSettings()` and trusts them, and each, left to the browser, makes a silent room.
+ *
+ * ONE CHANNEL. The encoder is built for `channelCount ?? 2` and fed the microphone's channels sliced
+ * DOWN to that count, never up. WebKit (Safari, every iPhone) reports no `channelCount`, so the
+ * encoder is stereo, the microphone mono, and the first frame fails "Input audio buffer is
+ * incompatible with codec parameters"; the library answers by resetting the track. The speaker sees
+ * a working mic; every listener's `audio/data` subscription is cancelled from the speaker's side a
+ * fraction of a second after it starts, before a single frame.
+ *
+ * 48 kHz. The library runs its capture at the microphone's own rate and encodes Opus at it. Chrome
+ * and WebKit both ENCODE Opus at 44.1 kHz without complaint and neither can DECODE it (Chrome refuses
+ * the decoder, "Unsupported configuration"; WebKit fails every packet), while
+ * `AudioDecoder.isConfigSupported` says yes to it all the same. So a speaker whose microphone runs at
+ * 44.1 kHz (common on Windows and on USB microphones) puts a full stream on the relay that no
+ * listener can play. Opus is a 48 kHz codec and EGG-03 says so: the capture context runs at 48 kHz
+ * and the browser resamples the microphone into it (checked in Chrome and WebKit; Firefox not
+ * measured).
+ *
+ * The track itself is untouched: only the settings the library reads say so.
+ * `wire-speaker.test.ts` holds both.
+ */
+export function opusSource(track: MediaStreamTrack): MediaStreamTrack {
+  const settings = track.getSettings.bind(track)
+  track.getSettings = () => ({ ...settings(), channelCount: 1, sampleRate: OPUS_SAMPLE_RATE })
+  return track
+}
+
+/** Opus's own rate, the one every decoder accepts (EGG-03). */
+export const OPUS_SAMPLE_RATE = 48_000
+
 export class RoomSpeaker {
   private broadcast: Publish.Broadcast | undefined
   private track: MediaStreamTrack | undefined
+  private meter: { context: AudioContext; timer: ReturnType<typeof setInterval> } | undefined
+  private loudAt = 0
   private readonly listeners = new Set<(state: SpeakerState) => void>()
   private state: SpeakerState = { status: 'idle', error: undefined }
+
+  /**
+   * Whether the microphone has heard the reader in the last moment. False while muted, because
+   * mute is "stop publishing" and a muted mic is not a voice anybody hears.
+   */
+  get talking(): boolean {
+    return this.state.status === 'live' && Date.now() - this.loudAt < TALKING_HOLD_MS
+  }
 
   get current(): SpeakerState {
     return this.state
@@ -305,8 +403,17 @@ export class RoomSpeaker {
     return () => this.listeners.delete(listener)
   }
 
-  /** Ask for the microphone and start broadcasting on the listener's connection as `pubkey`. */
-  async start(listener: RoomListener, pubkey: Hex): Promise<void> {
+  /** The input this broadcast is reading, as the browser names it; undefined before `start`. */
+  get device(): string | undefined {
+    return this.track?.getSettings().deviceId
+  }
+
+  /**
+   * Ask for the microphone and start broadcasting on the listener's connection as `pubkey`.
+   * `device` is an input the caller remembered, asked for as a preference:
+   * gone, and the browser's default opens instead.
+   */
+  async start(listener: RoomListener, pubkey: Hex, device?: string): Promise<void> {
     const established = listener.established
     const moq = listener.lite
     if (established === undefined || moq === undefined) {
@@ -317,7 +424,7 @@ export class RoomSpeaker {
     let track: MediaStreamTrack
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: { ...MIC_CONSTRAINTS, ...(device === undefined ? {} : { deviceId: { ideal: device } }) },
       })
       const first = stream.getAudioTracks()[0]
       if (first === undefined) throw new Error('no microphone track')
@@ -341,13 +448,52 @@ export class RoomSpeaker {
         connection: established,
         enabled: true,
         name: moq.Path.from(pubkey),
-        audio: { source: track as Publish.Audio.Source, enabled: true },
+        audio: { source: opusSource(track) as Publish.Audio.Source, enabled: true },
       })
+      this.listen(track)
       this.set({ status: 'live', error: undefined })
     } catch (err) {
       track.stop()
       this.set({ status: 'failed', error: err instanceof Error ? err.message : 'could not start broadcasting' })
     }
+  }
+
+  /**
+   * ANOTHER MICROPHONE, MID-BROADCAST (2026-09-24). The library's audio source is a signal, and
+   * setting it rebuilds the capture the same way mute and unmute already do, so a listener sees
+   * the audio rendition go and come back and re-subscribes, as it does for every unmute. The
+   * broadcast, its name and the connection stay.
+   *
+   * The new input is opened BEFORE the old one is let go, and `exact`, because the reader chose
+   * it: a device that refuses (unplugged, held by another app) leaves the current microphone
+   * broadcasting and answers false, never silence. Muted stays muted.
+   */
+  async switchTo(device: string): Promise<boolean> {
+    const broadcast = this.broadcast
+    const previous = this.track
+    if (broadcast === undefined || previous === undefined) return false
+    if (previous.getSettings().deviceId === device) return true
+    let next: MediaStreamTrack
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_CONSTRAINTS, deviceId: { exact: device } } })
+      const first = stream.getAudioTracks()[0]
+      if (first === undefined) throw new Error('no microphone track')
+      next = first
+    } catch {
+      return false
+    }
+    // Stopped, or switched again, while the browser was asking.
+    if (this.broadcast !== broadcast || this.track !== previous) {
+      next.stop()
+      return false
+    }
+    next.enabled = previous.enabled
+    this.track = next
+    broadcast.audio.source.set(opusSource(next) as Publish.Audio.Source)
+    previous.stop()
+    this.quiet()
+    this.listen(next)
+    return true
   }
 
   /** Mute stops the frames; nothing else changes — the broadcast stays announced. */
@@ -365,9 +511,45 @@ export class RoomSpeaker {
       // Closing an already-closed broadcast is not an error anybody can act on.
     }
     this.broadcast = undefined
+    this.quiet()
+    this.loudAt = 0
     this.track?.stop()
     this.track = undefined
     this.set({ status: 'idle', error: undefined })
+  }
+
+  private quiet(): void {
+    if (this.meter === undefined) return
+    clearInterval(this.meter.timer)
+    void this.meter.context.close().catch(() => undefined)
+    this.meter = undefined
+  }
+
+  /**
+   * The meter. `source.connect(analyser)` and nothing further: an AnalyserNode is a tap, and a
+   * node wired on to `destination` would be the loopback this file exists to avoid, with not even
+   * a relay in the way. Failure is a ring that never lights, never a microphone that does not work.
+   */
+  private listen(track: MediaStreamTrack): void {
+    try {
+      const Context = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (Context === undefined) return
+      const context = new Context()
+      void context.resume().catch(() => undefined)
+      const analyser = context.createAnalyser()
+      analyser.fftSize = 512
+      context.createMediaStreamSource(new MediaStream([track])).connect(analyser)
+      const samples = new Uint8Array(analyser.fftSize)
+      const timer = setInterval(() => {
+        analyser.getByteTimeDomainData(samples)
+        let peak = 0
+        for (const sample of samples) peak = Math.max(peak, Math.abs(sample - 128) / 128)
+        if (peak >= TALKING_PEAK) this.loudAt = Date.now()
+      }, METER_MS)
+      this.meter = { context, timer }
+    } catch {
+      // No meter is a ring that never lights; the room and the microphone are untouched.
+    }
   }
 
   private set(patch: Partial<SpeakerState>): void {

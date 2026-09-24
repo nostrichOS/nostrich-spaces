@@ -7,6 +7,7 @@ import {
   PRESENCE_OFF,
   ROOM_IDENTIFIER_PATTERN,
   buildAdminCommand,
+  buildDeparture,
   buildPresence,
   buildRoom,
   buildRoomReaction,
@@ -149,8 +150,28 @@ describe('buildPresence', () => {
       muted: false,
       publishing: false,
       onstage: false,
+      left: false,
       at: NOW,
     })
+  })
+})
+
+describe('buildDeparture', () => {
+  it('is the spec’s last beat, every flag off, plus the one tag that says the person has gone', () => {
+    const t = buildDeparture(`30312:${HOST}:abc123`, { relay: 'wss://relay-1.example.com', createdAt: NOW })
+    expect(t.kind).toBe(10312)
+    expect(t.tags).toEqual([
+      ['d', PRESENCE_IDENTIFIER],
+      ['a', `30312:${HOST}:abc123`, 'wss://relay-1.example.com'],
+      ['hand', '0'],
+      ['muted', '0'],
+      ['publishing', '0'],
+      ['onstage', '0'],
+      ['alt', 'Room Presence tag'],
+      ['left', '1'],
+    ])
+    const parsed = parsePresence({ ...t, id: 'e'.repeat(64), pubkey: SPEAKER, sig: '' } as NostrEvent)
+    expect(parsed).toMatchObject({ room: `30312:${HOST}:abc123`, handRaised: false, onstage: false, left: true, at: NOW })
   })
 })
 
